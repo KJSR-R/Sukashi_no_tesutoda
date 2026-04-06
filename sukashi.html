@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exif Pro - Stable Build</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&family=Inter:wght@700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
+    <style>
+        :root { --bg: #0a0a0a; --panel: #161616; --text: #f0f0f0; --border: #222; }
+        body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; overflow-x: hidden; }
+        
+        .menu-btn { position: fixed; top: 20px; left: 20px; z-index: 1100; cursor: pointer; background: rgba(255,255,255,0.05); border: 1px solid var(--border); padding: 10px; border-radius: 8px; color: white; display: flex; }
+        .side-menu { position: fixed; top: 0; left: -30%; width: 30%; height: 100%; background: var(--panel); z-index: 1000; transition: 0.4s; display: flex; flex-direction: column; padding-top: 80px; box-shadow: 10px 0 30px rgba(0,0,0,0.5); border-right: 1px solid var(--border); }
+        .side-menu.active { transform: translateX(100%); }
+        .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 999; display: none; }
+        .overlay.active { display: block; }
+        .menu-item { padding: 18px 30px; font-size: 14px; cursor: pointer; color: #888; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 15px; }
+
+        .container { display: flex; flex-direction: column; align-items: center; padding: 100px 20px; min-height: 100vh; box-sizing: border-box; }
+        .main-layout { display: none; gap: 40px; width: 100%; max-width: 1250px; margin-top: 20px; flex-wrap: wrap; justify-content: center; }
+        
+        #preview-container { flex: 1; min-width: 320px; max-width: 850px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); border-radius: 4px; overflow: hidden; line-height: 0; }
+        #exif-canvas { width: 100%; height: auto; display: block; }
+        
+        .info-panel { width: 320px; background: var(--panel); padding: 30px; border-radius: 16px; border: 1px solid var(--border); }
+        .info-title { font-family: 'Orbitron'; font-size: 11px; color: #555; letter-spacing: 2px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+        .info-item { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 13px; border-bottom: 1px solid #1f1f1f; padding-bottom: 6px; }
+        .info-label { color: #666; }
+        .info-value { color: #ddd; font-weight: 700; text-align: right; }
+
+        .toggle-section { margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+        .switch { position: relative; display: inline-block; width: 44px; height: 22px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #333; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #444; }
+        input:checked + .slider:before { transform: translateX(22px); }
+
+        #fileInput { display: none; }
+        .custom-file-label { background: var(--panel); color: #888; border: 1px solid var(--border); padding: 14px 35px; border-radius: 8px; cursor: pointer; font-weight: 700; display: inline-flex; align-items: center; gap: 10px; transition: 0.2s; }
+        .custom-file-label:hover { color: #fff; background: #222; }
+
+        @media (max-width: 768px) { .side-menu { width: 80%; left: -80%; } .info-panel { width: 100%; } }
+    </style>
+</head>
+<body>
+    <button class="menu-btn" onclick="toggleMenu()"><span class="material-icons">menu</span></button>
+    <div class="overlay" id="overlay" onclick="toggleMenu()"></div>
+    
+    <nav class="side-menu" id="sideMenu">
+        <div class="menu-item" onclick="triggerDownload()"><span class="material-icons">file_download</span> Export Image</div>
+        <div class="menu-item" onclick="location.reload()"><span class="material-icons">refresh</span> Reset</div>
+    </nav>
+
+    <div class="container">
+        <div class="upload-wrapper">
+            <label for="fileInput" class="custom-file-label"><span class="material-icons">add_photo_alternate</span> Select Photo</label>
+            <input type="file" id="fileInput" accept="image/*">
+        </div>
+
+        <div class="main-layout" id="mainLayout">
+            <div id="preview-container"><canvas id="exif-canvas"></canvas></div>
+            <div class="info-panel">
+                <div class="info-title">EXIF METADATA</div>
+                <div id="exif-list"></div>
+                <div class="toggle-section">
+                    <span style="font-size: 11px; font-weight: 700; letter-spacing: 1px;">DARK FOOTER</span>
+                    <label class="switch"><input type="checkbox" id="darkModeToggle"><span class="slider"></span></label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('exif-canvas'), ctx = canvas.getContext('2d');
+        let currentImg = null, currentExif = {};
+
+        function toggleMenu() { document.getElementById('sideMenu').classList.toggle('active'); document.getElementById('overlay').classList.toggle('active'); }
+
+        document.getElementById('fileInput').onchange = async function(e) {
+            const file = e.target.files[0]; if (!file) return;
+            
+            // Exif解析の完了を待機するPromise
+            currentExif = await new Promise(resolve => {
+                EXIF.getData(file, function() { resolve(EXIF.getAllTags(this)); });
+            });
+
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                currentImg = new Image();
+                currentImg.onload = async () => {
+                    await document.fonts.load("700 36px 'Orbitron'");
+                    await document.fonts.load("700 18px 'Inter'");
+                    await document.fonts.ready;
+                    drawCanvas();
+                    updateInfoPanel(currentExif);
+                    document.getElementById('mainLayout').style.display = 'flex';
+                };
+                currentImg.src = ev.target.result;
+            };
+            reader.readAsDataURL(file);
+        };
+
+        function drawCanvas() {
+            if (!currentImg) return;
+            const w = currentImg.width, h = currentImg.height, s = Math.max(w, h) / 1000, fH = Math.round(h * 0.15);
+            const isDark = document.getElementById('darkModeToggle').checked;
+            
+            canvas.width = w; canvas.height = h + fH;
+            ctx.fillStyle = isDark ? '#111' : '#fff';
+            ctx.fillRect(0, 0, w, h + fH);
+            ctx.drawImage(currentImg, 0, 0);
+
+            const pX = Math.round(w * 0.045), cY = h + (fH / 2), fsM = Math.round(36 * s), fsS = Math.round(18 * s), sp = Math.round(fsS * 0.9);
+            ctx.textBaseline = 'middle'; ctx.fillStyle = isDark ? '#fff' : '#000';
+
+            ctx.textAlign = 'left'; ctx.font = `700 ${fsM}px 'Orbitron'`;
+            ctx.fillText((currentExif.Model || 'UNKNOWN').toUpperCase(), pX, cY);
+
+            ctx.textAlign = 'right'; ctx.font = `700 ${fsS}px 'Inter'`;
+            const f = currentExif.FNumber ? `f/${currentExif.FNumber}` : '--';
+            const fl = currentExif.FocalLength ? `${currentExif.FocalLength}mm` : '--';
+            const exp = currentExif.ExposureTime ? (currentExif.ExposureTime < 1 ? `1/${Math.round(1/currentExif.ExposureTime)}s` : `${currentExif.ExposureTime}s`) : '--';
+            const iso = currentExif.ISOSpeedRatings ? `ISO ${currentExif.ISOSpeedRatings}` : '--';
+            
+            ctx.fillText(`${fl}  ${f}  ${exp}  ${iso}`, w - pX, cY - sp);
+            ctx.fillText((currentExif.DateTimeOriginal || "").replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1/$2/$3'), w - pX, cY + sp);
+        }
+
+        function updateInfoPanel(exif) {
+            const list = document.getElementById('exif-list');
+            const items = [
+                { l: 'Brand', v: exif.Make },
+                { l: 'Model', v: exif.Model },
+                { l: 'Lens', v: exif.LensModel || '---' },
+                { l: 'Software', v: exif.Software || '---' },
+                { l: 'Dimensions', v: `${currentImg.width} x ${currentImg.height}` }
+            ];
+            list.innerHTML = items.map(i => `<div class="info-item"><span class="info-label">${i.l}</span><span class="info-value">${i.v || '---'}</span></div>`).join('');
+        }
+
+        document.getElementById('darkModeToggle').onchange = drawCanvas;
+
+        function triggerDownload() {
+            if (canvas.width > 0) {
+                const a = document.createElement('a');
+                a.download = `ExifPro_${Date.now()}.png`;
+                a.href = canvas.toDataURL('image/png', 1.0);
+                a.click();
+            }
+        }
+    </script>
+</body>
+</html>
